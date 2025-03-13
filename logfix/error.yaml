@@ -1,0 +1,6 @@
+---
+- ERROR: Disk full
+- DEBUG: Checking system
+- CRITICAL: Kernel panic
+- INFO: Boot sequence started
+- WARNING: High CPU usage detected

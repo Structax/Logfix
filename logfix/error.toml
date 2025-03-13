@@ -1,0 +1,5 @@
+log1 = "ERROR: Connection timeout"
+log2 = "INFO: User logged in"
+log3 = "WARNING: Low battery"
+log4 = "CRITICAL: Security breach detected"
+log5 = "DEBUG: Verbose logging enabled"
