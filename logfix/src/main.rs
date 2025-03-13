@@ -1,3 +1,4 @@
+use anyhow::{Context, Result}; // 追加
 use rayon::prelude::*;
 use std::fs;
 use std::path::PathBuf;
@@ -6,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use serde_json;
 use serde_yaml;
 use toml;
-use reqwest;
+use reqwest::Client; // 修正
 use tokio;
 use regex::Regex;
 use similar::{TextDiff, Algorithm};
@@ -128,7 +129,7 @@ fn show_diff(original: &str, modified: &str) {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let matches = Command::new("logfix")
         .version("1.0")
         .author("Your Name <your_email@example.com>")
@@ -147,26 +148,54 @@ async fn main() {
             .action(ArgAction::SetTrue))
         .get_matches();
 
-    if let Some(file_path) = matches.get_one::<String>("file") {
-        let path = PathBuf::from(file_path);
-        match fs::read_to_string(&path) {
-            Ok(contents) => {
-                let (errors, warnings, infos, debugs, criticals) = process_logs_by_level(&contents);
-                if matches.get_flag("json") {
-                    let output = LogOutput {
-                        file: file_path.clone(),
-                        errors,
-                        warnings,
-                        infos,
-                        debugs,
-                        criticals,
-                    };
-                    println!("{}", serde_json::to_string_pretty(&output).unwrap());
-                } else {
-                    println!("Processed log output.");
-                }
-            }
-            Err(e) => eprintln!("Error reading file: {}", e),
+    let file_path = matches.get_one::<String>("file").unwrap();
+    let log_content = fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read log file: {}", file_path))?;
+    
+    let (errors, warnings, infos, debugs, criticals) = process_logs_by_level(&log_content);
+
+    if matches.get_flag("json") {
+        let output = LogOutput {
+            file: file_path.clone(),
+            errors,
+            warnings,
+            infos,
+            debugs,
+            criticals,
+        };
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("Processed log output.");
+    }
+
+    Ok(())
+}
+
+async fn get_fix_suggestion(log: &str, ai_mode: &str) -> Result<String> {
+    let api_url = "https://api.openai.com/v1/chat/completions";
+    let client = Client::new();
+    let prompt = format!("Analyze the following log and suggest a fix (AI mode: {}):\n{}", ai_mode, log);
+    
+    let response = client.post(api_url)
+        .header("Authorization", "Bearer YOUR_OPENAI_API_KEY")
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{ "role": "system", "content": "You are an expert log analyzer." },
+                         { "role": "user", "content": prompt }],
+            "temperature": 0.7
+        }))
+        .send()
+        .await
+        .context("Failed to send request to OpenAI API")?
+        .json::<serde_json::Value>()
+        .await
+        .context("Failed to parse response from OpenAI API")?;
+    
+    if let Some(choice) = response["choices"].get(0) {
+        if let Some(text) = choice["message"]["content"].as_str() {
+            return Ok(text.to_string());
         }
     }
+    
+    Err(anyhow::anyhow!("Failed to get AI-generated fix"))
 }
