@@ -3,3 +3,7 @@ WARNING: Deprecated function used
 INFO: Service started successfully
 DEBUG: Variable x = 42
 CRITICAL: System crash detected
+ERROR: Failed to load module
+Source code:
+```python
+import non_existent_module  # ModuleNotFoundError
