@@ -10,6 +10,8 @@ use similar::{TextDiff, Algorithm};
 use colored::*;
 use reqwest::Client;
 use tokio;
+use tiktoken_rs::cl100k_base;
+
 
 #[derive(Serialize)]
 struct LogOutput {
@@ -62,17 +64,58 @@ fn show_diff(original: &str, modified: &str) {
     }
 }
 
+pub fn optimize_log_data(log_data: &str, max_tokens: usize) -> Result<String> {
+    let bpe = cl100k_base()?;
+    let tokens = bpe.encode_with_special_tokens(log_data);
+    let token_count = tokens.len();
+
+    if token_count <= max_tokens {
+        return Ok(log_data.to_string());
+    }
+
+    let truncated_tokens = tokens[..max_tokens].to_vec(); // Vec<u32> に変換
+    let optimized_log = bpe.decode(truncated_tokens)?; // ✅ そのまま渡す
+
+    Ok(optimized_log)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_optimize_log_data() {
+        let log = "Error: Something went wrong! Please check the system logs for more details.";
+        let optimized = optimize_log_data(log, 10).unwrap();
+        
+        assert!(optimized.len() < log.len());
+    }
+}
+
 async fn get_fix_suggestion(log: &str, ai_mode: &str) -> Result<String> {
+    let optimized_log = optimize_log_data(log, 4096)?; // 4096トークン以内に制限
+
     let api_url = "https://api.openai.com/v1/chat/completions";
     let client = Client::new();
     let prompt = format!(
-        "Rewrite the following log with all errors fixed.
-         Convert errors into successful messages where possible.
-         Do not provide explanations, only return the corrected log content:\n{}",
-        log
-    );    
+        "The following log contains errors. 
+        Please generate the corresponding FIXED source code.
+        - The programming language is: Rust (or Python, JavaScript, etc.)
+        - If a syntax error exists, provide the corrected code.
+        - If a missing function or variable caused the error, include the corrected definition.
+        - Return ONLY the corrected code, do not explain.
+    
+        Here is the error log:
+        ```log
+        {}
+        ```",
+        optimized_log 
+    );
+    
+      
+    println!("✅ DEBUG: Sending request to OpenAI API...");
     let response = client.post(api_url)
-        .header("Authorization", "Bearer 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")
+        .header("Authorization", &format!("Bearer {}", std::env::var("OPENAI_API_KEY")?))
         .json(&serde_json::json!({
             "model": "gpt-4",
             "messages": [{ "role": "system", "content": "You are an expert log analyzer." },
@@ -80,21 +123,23 @@ async fn get_fix_suggestion(log: &str, ai_mode: &str) -> Result<String> {
             "temperature": 0.7
         }))
         .send()
-        .await
-        .context("Failed to send request to OpenAI API")?
-        .json::<serde_json::Value>()
-        .await
-        .context("Failed to parse response from OpenAI API")?;
-    
-    if let Some(choice) = response["choices"].get(0) {
-        if let Some(text) = choice["message"]["content"].as_str() {
-            return Ok(text.to_string());
-        }
-    }
-    
-    Err(anyhow::anyhow!("Failed to get AI-generated fix"))
-}
+        .await?;
+        
+     println!("✅ DEBUG: OpenAI API response received!");
 
+     let response_json = response.json::<serde_json::Value>().await?;
+     println!("✅ DEBUG: OpenAI API response: {:#?}", response_json);
+        
+        if let Some(choice) = response_json["choices"].get(0) {
+            if let Some(text) = choice["message"]["content"].as_str() {
+                return Ok(text.to_string());
+            }
+        }
+        println!("❌ DEBUG: OpenAI API response did not contain a valid fix.");
+        Err(anyhow::anyhow!("Failed to get AI-generated fix"))
+    }
+
+   
 fn detect_log_format(contents: &str) -> &str {
     if contents.trim().starts_with('{') {
         "json"
@@ -179,7 +224,9 @@ async fn main() -> Result<()> {
         .version("1.0")
         .about("A CLI tool for analyzing and fixing error logs")
         .arg(Arg::new("json").long("json").help("Output log content in JSON format").action(ArgAction::SetTrue))
-        .arg(Arg::new("diff").long("diff").help("Show differences between original and fixed logs").num_args(0..=1).value_name("FIXED_FILE"))
+        .arg(Arg::new("diff").long("diff").help("Show differences between original and fixed logs")
+        .num_args(0..=1).value_name("FIXED_FILE")
+        .action(ArgAction::SetTrue)) // ← これを追加！
         .arg(Arg::new("fix").long("fix").help("Automatically fix errors in the log").action(ArgAction::SetTrue))
         .arg(Arg::new("fixed")
         .long("fixed")
@@ -190,18 +237,8 @@ async fn main() -> Result<()> {
 
     let file_path = matches.get_one::<String>("file").unwrap(); 
     let log_content = fs::read_to_string(file_path)?; // ← 追加
-let log_output = process_logs_by_level(&log_content);
-        .version("1.0")
-        .about("A CLI tool for analyzing and fixing error logs")
-        .arg(Arg::new("json").long("json").help("Output log content in JSON format").action(ArgAction::SetTrue))
-        .arg(Arg::new("diff").long("diff").help("Show differences between original and fixed logs").num_args(0..=1).value_name("FIXED_FILE"))
-        .arg(Arg::new("fix").long("fix").help("Automatically fix errors in the log").action(ArgAction::SetTrue))
-        .arg(Arg::new("fixed")
-        .long("fixed")
-        .help("Path to fixed log file")
-        .num_args(1))
-        .arg(Arg::new("file").help("Path to the error log file").required(true))
-        .get_matches();
+    let log_output = process_logs_by_level(&log_content);
+
     if matches.get_flag("diff") {
             let original_file = matches.get_one::<String>("file").unwrap(); // ここで取得
             let fixed_file = matches.get_one::<String>("fixed_file").unwrap(); // 修正後のファイルを取得
@@ -220,13 +257,22 @@ let log_output = process_logs_by_level(&log_content);
         println!("📝 Fixed Log:\n{}", fix_suggestion);
 
     }
-    
+    let log_output_text = format!(
+    "{}\n{}\n{}\n{}\n{}",
+    log_output.errors.join("\n"),
+    log_output.warnings.join("\n"),
+    log_output.infos.join("\n"),
+    log_output.debugs.join("\n"),
+    log_output.criticals.join("\n")
+);
     if matches.get_flag("json") {
         println!("{}", serde_json::to_string_pretty(&log_output).unwrap());
+    } else if log_output_text.contains("impossible to provide any corrected code") {
+        println!("❌ No source code found in the log.");
+        println!("💡 Please provide a log containing actual code for `logfix --fix` to generate corrections.");
     } else {
         println!("Processed log output.");
     }
-
     
     Ok(())
 }

@@ -1,1 +1,3 @@
-ERROR: Out of memory
+ERROR: Failed to connect to database
+WARNING: Deprecated function used
+INFO: Service started successfully
