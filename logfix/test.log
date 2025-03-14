@@ -1,0 +1,5 @@
+ERROR: Failed to load module
+WARNING: Deprecated function used
+INFO: Service started successfully
+DEBUG: Variable x = 42
+CRITICAL: System crash detected
