@@ -1,3 +1,2 @@
-ERROR: Failed to connect to database
-WARNING: Deprecated function used
-INFO: Service started successfully
+[ERROR] src/main.rs:10: expected `;` but found `,`
+[ERROR] src/lib.rs:25: use of undeclared crate `serde`
